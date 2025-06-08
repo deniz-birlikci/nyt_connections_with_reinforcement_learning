@@ -135,11 +135,11 @@ class NYTGameState(BaseModel):
     found_groups: List[Dict[str, Any]] = []
 
     @classmethod
-    def initialize(cls, group_list: List[Dict[str, Any]]) -> NYTGameState:
+    def initialize(cls, answer_dict: List[Dict[str, Any]]) -> NYTGameState:
         """Initialize a new game state from an answer."""
         all_words = []
         connections_groups = []
-        for group in group_list:
+        for group in answer_dict:
             connections_group = ConnectionsGroup(**group)
             all_words.extend(connections_group.members)
             connections_groups.append(connections_group)

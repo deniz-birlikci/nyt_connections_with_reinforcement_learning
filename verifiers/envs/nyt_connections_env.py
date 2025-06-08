@@ -135,11 +135,11 @@ class NYTGameState(BaseModel):
     found_groups: List[Dict[str, Any]] = []
 
     @classmethod
-    def initialize(cls, answer_dict: List[Dict[str, Any]]) -> NYTGameState:
+    def initialize(cls, group_list: List[Dict[str, Any]]) -> NYTGameState:
         """Initialize a new game state from an answer."""
         all_words = []
         connections_groups = []
-        for group in answer_dict:
+        for group in group_list:
             connections_group = ConnectionsGroup(**group)
             all_words.extend(connections_group.members)
             connections_groups.append(connections_group)
@@ -308,7 +308,7 @@ class NYTConnectionsEnv(MultiTurnEnv):
         completion = []
         turn = 0
 
-        state = NYTGameState.initialize(json.loads(answer))
+        state = NYTGameState.model_validate(json.loads(answer))
         while not is_completed:
             if state.is_completed():
                 is_completed = True

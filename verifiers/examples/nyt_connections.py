@@ -10,7 +10,8 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch --config-file configs/zero3.yaml 
 """
 
 size = '7B'
-model_name = f'willcb/Qwen2.5-{size}-NYTConnections-SFT'
+# model_name = f'willcb/Qwen2.5-{size}-NYTConnections-SFT'
+model_name = 'Qwen/Qwen2.5-7B-Instruct'
 model, tokenizer = vf.get_model_and_tokenizer(model_name)
 
 vf_env = NYTConnectionsEnv(

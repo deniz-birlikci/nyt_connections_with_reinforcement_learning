@@ -17,6 +17,9 @@ import random
 import requests
 from datasets import Dataset
 
+# Fixed configuration
+RANDOM_SEED = 42
+NYT_CONNECTIONS_URL = "https://raw.githubusercontent.com/Eyefyre/NYT-Connections-Answers/refs/heads/main/connections.json"
 
 NYT_CONNECTIONS_SYSTEM_PROMPT = """\
 You are playing NYT Connections, a word puzzle game where you need to find groups of 4 words that share something in common.
@@ -76,18 +79,6 @@ class NYTConnectionsParser(Parser):
             
         return result
     
-    def parse_answer(self, completion: List[Dict[str, str]] | str) -> List[str] | None:
-        """Extract the last valid guess from a completion."""
-        if isinstance(completion, str):
-            parsed = self.parse(completion)
-            return parsed.guess if parsed.guess and len(parsed.guess) == 4 else None
-        else:
-            for msg in reversed(self.get_assistant_messages(completion)):
-                parsed = self.parse(msg['content'])
-                if parsed.guess and len(parsed.guess) == 4:
-                    return parsed.guess
-        return None
-    
     def get_format_reward_func(self) -> Callable:
         """Return a reward function that checks format compliance."""
         def format_reward_func(completion: List[Dict[str, str]], **kwargs) -> float:
@@ -120,55 +111,6 @@ class NYTConnectionsParser(Parser):
 
 class NYTConnectionsEnv(MultiTurnEnv):
     """Environment for NYT Connections word puzzle game."""
-    
-    def _init_nyt_datasets(self, num_samples: int = 1000, num_eval_samples: int = 100, seed: int = 0) -> Tuple[Dataset, Dataset]:
-        """
-        Initialize train and eval datasets from NYT Connections JSON data.
-        
-        Args:
-            num_samples: Number of training samples
-            num_eval_samples: Number of evaluation samples
-            seed: Random seed for shuffling
-            
-        Returns:
-            Tuple of (train_dataset, eval_dataset)
-        """
-        # Fetch JSON data
-        url = "https://raw.githubusercontent.com/Eyefyre/NYT-Connections-Answers/refs/heads/main/connections.json"
-        response = requests.get(url)
-        data = json.loads(response.text)
-        
-        # Convert to dataset format
-        dataset_rows = []
-        for game in data:
-            # Format question as the list of all words
-            all_words = []
-            for group in game['answers']:
-                all_words.extend(group['members'])
-            
-            # Format answer as the list of groups
-            dataset_rows.append({
-                'question': all_words,
-                'answer': game['answers']
-            })
-            
-        # Set seed for reproducibility
-        random.seed(seed)
-        
-        # Shuffle and split into train/eval
-        random.shuffle(dataset_rows)
-        
-        # Create datasets
-        train_rows = dataset_rows[:-num_eval_samples]
-        eval_rows = dataset_rows[-num_eval_samples:]
-        
-        if len(train_rows) > num_samples:
-            train_rows = train_rows[:num_samples]
-            
-        train_dataset = Dataset.from_list(train_rows)
-        eval_dataset = Dataset.from_list(eval_rows)
-        
-        return train_dataset, eval_dataset
 
     def __init__(self, 
                  max_turns: int = 4,
@@ -187,13 +129,13 @@ class NYTConnectionsEnv(MultiTurnEnv):
             seed=seed
         )
         
-        def success_reward_func(completion, answer, **kwargs) -> float:
+        def success_reward_func(**kwargs) -> float:
             """Reward for successfully solving the puzzle."""
             state = kwargs.get('state', {})
             found_groups = state.get('found_groups', [])
             return 1.0 if len(found_groups) == 4 else 0.0
         
-        def efficiency_reward_func(completion, answer, **kwargs) -> float:
+        def efficiency_reward_func(**kwargs) -> float:
             """Reward based on efficiency (fewer wrong guesses)."""
             state = kwargs.get('state', {})
             lives_used = 4 - state.get('lives', 4)
@@ -202,7 +144,7 @@ class NYTConnectionsEnv(MultiTurnEnv):
                 return max(0, (4 - lives_used) / 4)
             return 0.0
         
-        def partial_progress_reward_func(completion, answer, **kwargs) -> float:
+        def partial_progress_reward_func(**kwargs) -> float:
             """Reward for partial progress (finding some groups)."""
             state = kwargs.get('state', {})
             found_groups = len(state.get('found_groups', []))
@@ -226,25 +168,25 @@ class NYTConnectionsEnv(MultiTurnEnv):
         self.parser = parser
         self.rubric = rubric
     
-    def _format_board_state(self, words: List[str], found_groups: List[Dict[str, Any]]) -> str:
+    def _format_board_state(self, words: List[str], found_groups: List[Dict[str, Any]], show_level: bool = False) -> str:
         """Format the current board state for display."""
         if found_groups:
             board_text = "SOLVED GROUPS:\n"
             for group in found_groups:
                 level_colors = ["🟨", "🟩", "🟦", "🟪"]
+                level_text = ["Easy", "Medium", "Hard", "Very Hard"]
                 color = level_colors[group['level']]
-                board_text += f"{color} {group['group']}: {', '.join(group['members'])}\n"
+                level = level_text[group['level']]
+                if show_level:
+                    board_text += f"Level {level} - {group['group']}: {', '.join(group['members'])}\n"
+                else:
+                    board_text += f"{group['group']}: {', '.join(group['members'])}\n"
             board_text += "\nREMAINING WORDS:\n"
         else:
             board_text = "WORDS ON THE BOARD:\n"
         
-        # Show remaining words in a 4x4 grid
-        # Shuffle the words
-        random.shuffle(words)
-        if words:
-            for i in range(0, len(words), 4):
-                row = words[i:i+4]
-                board_text += " | ".join(f"{word:12}" for word in row) + "\n"
+        # Show remaining words in a list
+        board_text += ", ".join(words)
         
         return board_text.strip()
     
@@ -303,6 +245,7 @@ class NYTConnectionsEnv(MultiTurnEnv):
                     if word.upper() in state['remaining_words']:
                         state['remaining_words'].remove(word.upper())
                 
+                random.shuffle(state['remaining_words'])
                 state['found_groups'].append(matched_group)
                 
                 if len(state['found_groups']) == 4:
@@ -322,3 +265,53 @@ class NYTConnectionsEnv(MultiTurnEnv):
         
         env_message = {"role": "user", "content": response}
         return env_message, state
+    
+    def _init_nyt_datasets(self, num_eval_samples: int = 100) -> Tuple[Dataset, Dataset]:
+        """
+        Initialize train and eval datasets from NYT Connections JSON data.
+        
+        Args:
+            num_samples: Number of training samples
+            num_eval_samples: Number of evaluation samples
+            seed: Random seed for shuffling
+            
+        Returns:
+            Tuple of (train_dataset, eval_dataset)
+        """
+        # Fetch JSON data
+        response = requests.get(NYT_CONNECTIONS_URL)
+        data = json.loads(response.text)
+        
+        # Convert to dataset format
+        dataset_rows = []
+        for game in data:
+            # Format question as the list of all words
+            all_words = []
+            for group in game['answers']:
+                all_words.extend(group['members'])
+            
+            # Format answer as the list of groups
+            dataset_rows.append({
+                'question': all_words,
+                'answer': game['answers']
+            })
+            
+        # Set seed for reproducibility
+        random.seed(RANDOM_SEED)
+        
+        # Shuffle and split into train/eval
+        random.shuffle(dataset_rows)
+        
+        print(f"Total dataset size: {len(dataset_rows)}")
+        
+        # Create datasets
+        train_rows = dataset_rows[:-num_eval_samples]
+        eval_rows = dataset_rows[-num_eval_samples:]
+        
+        train_dataset = Dataset.from_list(train_rows)
+        eval_dataset = Dataset.from_list(eval_rows)
+        
+        print(f"Training dataset size: {len(train_dataset)}")
+        print(f"Evaluation dataset size: {len(eval_dataset)}")
+        
+        return train_dataset, eval_dataset

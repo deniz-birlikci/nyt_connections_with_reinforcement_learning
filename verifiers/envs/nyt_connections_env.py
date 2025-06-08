@@ -19,6 +19,14 @@ import random
 import requests
 from datasets import Dataset
 
+from abc import abstractmethod
+from copy import deepcopy
+from typing import List, Dict, Any, Tuple, Union
+
+from openai import OpenAI
+
+from verifiers.envs.environment import Environment
+
 # Fixed configuration
 RANDOM_SEED = 42
 NYT_CONNECTIONS_URL = "https://raw.githubusercontent.com/Eyefyre/NYT-Connections-Answers/refs/heads/main/connections.json"
@@ -241,18 +249,13 @@ class NYTConnectionsEnv(MultiTurnEnv):
         )
         self.parser = parser
         self.rubric = rubric
+
     
     def env_response(self, 
                      messages: List[Dict[str, Any]], 
-                     state: Dict[str, Any], 
-                     **kwargs: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                     state: NYTGameState, 
+                     **kwargs: Any) -> Tuple[Dict[str, Any], NYTGameState]:
         """Generate environment response after a player guess."""
-
-        # we need to initialize the state
-        if len(state) == 1 and "answer" in state:
-            state = NYTGameState.initialize(json.loads(state['answer']))
-        else:
-            state = NYTGameState.model_validate(state)
         
         # Parse the player's guess
         last_message = messages[-1]['content']
@@ -284,7 +287,47 @@ class NYTConnectionsEnv(MultiTurnEnv):
                     response = f"❌ Incorrect guess. Lives remaining: {state.lives}\n\n{state.get_current_prompt()}"
         
         env_message = {"role": "user", "content": response}
-        return env_message, state.model_dump()
+        return env_message, state
+    
+    def rollout(self,
+                client: OpenAI,
+                model: str,
+                prompt: Union[str, List[Dict[str, Any]]],
+                answer: str,
+                sampling_args: Dict[str, Any] = {},
+                **kwargs: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Generate a multi-turn rollout with the environment (messages, state).
+        """
+        is_completed = False
+        assert isinstance(prompt, list)
+        messages = deepcopy(prompt) 
+        completion = []
+        turn = 0
+
+        state = NYTGameState.initialize(json.loads(answer))
+        while not is_completed:
+            if state.is_completed():
+                is_completed = True
+                break
+            response = self.get_model_response(
+                prompt=messages,
+                client=client,
+                model=model,
+                sampling_args=sampling_args,
+                message_type=self.message_type
+            )
+            has_error = response.startswith("[ERROR]")
+            messages.append({"role": "assistant", "content": response})
+            completion.append({"role": "assistant", "content": response})
+            turn += 1
+            if state.is_completed() or turn >= self.max_turns or has_error:
+                is_completed = True
+            else:
+                env_msg, state = self.env_response(messages, state, **kwargs)
+                messages.append(env_msg)
+                completion.append(env_msg)
+        return completion, state.model_dump()
     
     def _init_nyt_datasets(self, num_eval_samples: int = 100) -> Tuple[Dataset, Dataset]:
         """

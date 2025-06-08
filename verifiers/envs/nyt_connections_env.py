@@ -250,7 +250,10 @@ class NYTConnectionsEnv(MultiTurnEnv):
         self.parser = parser
         self.rubric = rubric
 
-    
+    def is_completed(self, **kwargs: Any) -> bool:
+        """We don't use this method, just have it for compatibility w superclass"""
+        pass
+
     def env_response(self, 
                      messages: List[Dict[str, Any]], 
                      state: NYTGameState, 

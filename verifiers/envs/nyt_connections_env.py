@@ -114,9 +114,7 @@ class NYTConnectionsEnv(MultiTurnEnv):
 
     def __init__(self, 
                  max_turns: int = 4,
-                 num_samples: int = 1000,
                  num_eval_samples: int = 100,
-                 seed: int = 0,
                  **kwargs):
         
         parser = NYTConnectionsParser()
@@ -124,9 +122,7 @@ class NYTConnectionsEnv(MultiTurnEnv):
         
         # Initialize datasets if not provided
         dataset, eval_dataset = self._init_nyt_datasets(
-            num_samples=num_samples,
             num_eval_samples=num_eval_samples,
-            seed=seed
         )
         
         def success_reward_func(**kwargs) -> float:

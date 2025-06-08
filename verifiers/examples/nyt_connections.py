@@ -3,7 +3,7 @@ from verifiers.envs.nyt_connections_env import NYTConnectionsEnv
 
 """
 Inference:
-CUDA_VISIBLE_DEVICES=0,1,2,3 vf-vllm --model willcb/Qwen2.5-7B-NYTConnections-SFT --tensor-parallel-size 4
+CUDA_VISIBLE_DEVICES=0,1,2,3 vf-vllm --model Qwen/Qwen2.5-7B-Instruct --tensor-parallel-size 4
 
 Training:
 CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch --config-file configs/zero3.yaml --num-processes 4 verifiers/examples/nyt_connections.py

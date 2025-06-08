@@ -2,11 +2,13 @@
 Define a new environment, subclassing the MultiTurnEnv over from the multiturn_env.py file,
 that is used to play the NYT Connections game.
 """
+from __future__ import annotations
 import re
 import random
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from types import SimpleNamespace
 from datasets import Dataset
+from pydantic import BaseModel, Field
 
 from verifiers.envs.multiturn_env import MultiTurnEnv
 from verifiers.parsers import Parser
@@ -107,7 +109,83 @@ class NYTConnectionsParser(Parser):
             return total_score / len(model_messages) if model_messages else 0.0
         
         return format_reward_func
+    
 
+class ConnectionsGroup(BaseModel):
+    group: str
+    members: List[str]
+    level: int
+
+    def __repr__(self) -> str:
+        return f"{self.group}: {', '.join(self.members)}"
+
+class NYTGameState(BaseModel):
+    """Pydantic model for NYT Connections game state."""
+    remaining_words: List[str]
+    answer: List[ConnectionsGroup]
+    lives: int = 4
+    found_groups: List[Dict[str, Any]] = []
+
+    @classmethod
+    def initialize(cls, answer_dict: List[Dict[str, Any]]) -> NYTGameState:
+        """Initialize a new game state from an answer."""
+        all_words = []
+        connections_groups = []
+        for group in answer_dict:
+            connections_group = ConnectionsGroup(**group)
+            all_words.extend(connections_group.members)
+            connections_groups.append(connections_group)
+
+        # we need to shuffle the words
+        random.shuffle(all_words)
+        
+        return cls(
+            lives=4,
+            found_groups=[],
+            remaining_words=[word.upper() for word in all_words],
+            answer=connections_groups
+        )
+
+    def get_current_prompt(self) -> str:
+        """Format the current board state for display."""
+        if self.found_groups:
+            board_text = "SOLVED GROUPS:\n"
+            for group in self.found_groups:
+                board_text += f"{group}\n"
+            board_text += "\nREMAINING WORDS:\n"
+        else:
+            board_text = "WORDS ON THE BOARD:\n"
+        
+        # Show remaining words in a list
+        board_text += ", ".join(self.remaining_words)
+        
+        return board_text.strip()
+    
+    def check_guess(self, guess: List[str]) -> Tuple[bool, Optional[ConnectionsGroup]]:
+        """Check if a guess matches any of the remaining groups."""
+        guess_set = set(word.upper() for word in guess)
+        for group in self.answer:
+            group_set = set(word.upper() for word in group.members)
+            if guess_set == group_set:
+                return True, group
+        
+        return False, None
+    
+    def is_completed(self) -> bool:
+        """Check if the game is completed."""
+        return self.lives <= 0 or len(self.found_groups) == 4
+    
+    def decrease_lives(self) -> None:
+        """Decrease the number of lives by 1."""
+        self.lives -= 1
+    
+    def remove_found_words(self, group: ConnectionsGroup) -> None:
+        """Remove found words from remaining words and add group to found groups."""
+        for word in group.members:
+            if word.upper() in self.remaining_words:
+                self.remaining_words.remove(word.upper())
+        random.shuffle(self.remaining_words)
+        self.found_groups.append(group)
 
 class NYTConnectionsEnv(MultiTurnEnv):
     """Environment for NYT Connections word puzzle game."""
@@ -164,64 +242,17 @@ class NYTConnectionsEnv(MultiTurnEnv):
         self.parser = parser
         self.rubric = rubric
     
-    def _format_board_state(self, words: List[str], found_groups: List[Dict[str, Any]], show_level: bool = False) -> str:
-        """Format the current board state for display."""
-        if found_groups:
-            board_text = "SOLVED GROUPS:\n"
-            for group in found_groups:
-                level_colors = ["🟨", "🟩", "🟦", "🟪"]
-                level_text = ["Easy", "Medium", "Hard", "Very Hard"]
-                color = level_colors[group['level']]
-                level = level_text[group['level']]
-                if show_level:
-                    board_text += f"Level {level} - {group['group']}: {', '.join(group['members'])}\n"
-                else:
-                    board_text += f"{group['group']}: {', '.join(group['members'])}\n"
-            board_text += "\nREMAINING WORDS:\n"
-        else:
-            board_text = "WORDS ON THE BOARD:\n"
-        
-        # Show remaining words in a list
-        board_text += ", ".join(words)
-        
-        return board_text.strip()
-    
-    def _check_guess(self, guess: List[str], answer: List[Dict[str, Any]]) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """Check if a guess matches any of the remaining groups."""
-        guess_set = set(word.upper() for word in guess)
-        
-        for group in answer:
-            group_set = set(word.upper() for word in group['members'])
-            if guess_set == group_set:
-                return True, group
-        
-        return False, None
-    
-    def is_completed(self, 
-                     messages: List[Dict[str, Any]], 
-                     state: Dict[str, Any], 
-                     **kwargs: Any) -> bool:
-        """Check if the game is completed (all groups found or no lives left)."""
-        lives = state.get('lives', 4)
-        found_groups = state.get('found_groups', [])
-        return lives <= 0 or len(found_groups) == 4
-    
     def env_response(self, 
                      messages: List[Dict[str, Any]], 
                      state: Dict[str, Any], 
                      **kwargs: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Generate environment response after a player guess."""
-        
-        # Initialize state if needed
-        if 'lives' not in state:
-            state['lives'] = 4
-            state['found_groups'] = []
-            # Get all words from the answer
-            answer = state['answer']
-            all_words = []
-            for group in answer:
-                all_words.extend(group['members'])
-            state['remaining_words'] = [word.upper() for word in all_words]
+
+        # we need to initialize the state
+        if len(state) == 1 and "answer" in state:
+            state = NYTGameState.initialize(json.loads(state['answer']))
+        else:
+            state = NYTGameState.model_validate(state)
         
         # Parse the player's guess
         last_message = messages[-1]['content']
@@ -230,37 +261,30 @@ class NYTConnectionsEnv(MultiTurnEnv):
         
         if guess is None or len(guess) != 4:
             response = "Please provide exactly 4 words in your guess, separated by commas."
-            state['lives'] -= 1
+            state.decrease_lives()
         else:
             # Check if guess is correct
-            is_correct, matched_group = self._check_guess(guess, state['answer'])
+            is_correct, matched_group = state.check_guess(guess)
             
             if is_correct:
                 # Remove found words from remaining words
-                for word in matched_group['members']:
-                    if word.upper() in state['remaining_words']:
-                        state['remaining_words'].remove(word.upper())
+                state.remove_found_words(matched_group)
                 
-                random.shuffle(state['remaining_words'])
-                state['found_groups'].append(matched_group)
-                
-                if len(state['found_groups']) == 4:
-                    response = f"🎉 CORRECT! You found: {matched_group['group']}\n\nCongratulations! You solved the puzzle!"
+                if state.is_completed():
+                    response = f"🎉 CORRECT! You found: {matched_group}\n\nCongratulations! You solved the puzzle!"
                 else:
-                    response = f"🎉 CORRECT! You found: {matched_group['group']}\n\n{self._format_board_state(state['remaining_words'], state['found_groups'])}"
+                    response = f"🎉 CORRECT! You found: {matched_group}\n\n{state.get_current_prompt()}"
             else:
-                state['lives'] -= 1
-                if state['lives'] <= 0:
+                state.decrease_lives()
+                if state.lives <= 0:
                     response = f"❌ Incorrect guess. Game over! You ran out of lives.\n\nThe correct groups were:\n"
-                    for group in state['answer']:
-                        level_colors = ["🟨", "🟩", "🟦", "🟪"]
-                        color = level_colors[group['level']]
-                        response += f"{color} {group['group']}: {', '.join(group['members'])}\n"
+                    for group in state.answer:
+                        response += f"{group}\n"
                 else:
-                    response = f"❌ Incorrect guess. Lives remaining: {state['lives']}\n\n{self._format_board_state(state['remaining_words'], state['found_groups'])}"
+                    response = f"❌ Incorrect guess. Lives remaining: {state.lives}\n\n{state.get_current_prompt()}"
         
         env_message = {"role": "user", "content": response}
-        return env_message, state
+        return env_message, state.model_dump()
     
     def _init_nyt_datasets(self, num_eval_samples: int = 100) -> Tuple[Dataset, Dataset]:
         """
@@ -281,15 +305,12 @@ class NYTConnectionsEnv(MultiTurnEnv):
         # Convert to dataset format
         dataset_rows = []
         for game in data:
-            # Format question as the list of all words
-            all_words = []
-            for group in game['answers']:
-                all_words.extend(group['members'])
+            game_state = NYTGameState.initialize(game['answers'])
             
             # Format answer as the list of groups
             dataset_rows.append({
-                'question': all_words,
-                'answer': game['answers']
+                'question': game_state.get_current_prompt(),
+                'answer': json.dumps(game_state.model_dump())
             })
             
         # Set seed for reproducibility

@@ -25,7 +25,7 @@ training_args = vf.grpo_defaults(run_name=run_name)
 training_args.num_iterations = 1
 training_args.per_device_train_batch_size = 16
 training_args.num_generations = 16
-training_args.gradient_accumulation_steps = 4
+training_args.gradient_accumulation_steps = 1
 training_args.max_prompt_length = 500
 training_args.max_completion_length = 4096
 training_args.max_steps = 3000

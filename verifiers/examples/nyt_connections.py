@@ -23,7 +23,7 @@ vf_env = NYTConnectionsEnv(
 run_name = f"nyt-connections-grpo-{size}"
 training_args = vf.grpo_defaults(run_name=run_name)
 training_args.num_iterations = 1
-training_args.per_device_train_batch_size = 16
+training_args.per_device_train_batch_size = 8
 training_args.num_generations = 16
 training_args.gradient_accumulation_steps = 1
 training_args.max_prompt_length = 500
